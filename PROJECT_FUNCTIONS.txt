@@ -1,0 +1,141 @@
+Project: HR Management System (Next.js frontend + Express backend)
+
+Ringkasan ini memberikan penjelasan rinci fungsi-fungsi utama pada proyek, alur kerja, dan file penting. Semua penjelasan ditulis dalam bahasa Indonesia.
+
+== Ikhtisar Singkat ==
+- Frontend: Next.js (App Router) di folder `app/`. Menyajikan antarmuka pengguna (dashboard, autentikasi, form, dll.).
+- Backend: `server.js` (Express) menangani API, autentikasi, manajemen pegawai, upload, ekspor, dan pengiriman email.
+- Database: MySQL, koneksi melalui `mysql2/promise`.
+- Email: `nodemailer` dikonfigurasi lewat variabel lingkungan (`.env.local`).
+
+== Struktur dan Fungsi Utama (Rinci, per bagian) ==
+
+1) Backend — `server.js`
+- Tujuan umum: Menyediakan API untuk operasi CRUD, autentikasi (login/register/refresh), alur lupa/reset password, ekspor laporan, dan upload file.
+- Koneksi Database: Dibuat pool koneksi MySQL (`mysql.createPool`) sehingga API dapat menjalankan query dengan efisien.
+- Autentikasi & Token:
+  - `POST /api/auth/register` : Validasi input, hashing password dengan `bcrypt`, menyimpan user, mengembalikan `accessToken` dan `refreshToken` (JWT).
+  - `POST /api/auth/login` : Verifikasi kredensial, perbarui `last_login`, return `accessToken` (akses singkat) dan `refreshToken` (akses jangka panjang).
+  - `POST /api/auth/refresh` : Tukar `refreshToken` untuk `accessToken` baru.
+
+- Reset Password:
+  - `POST /api/auth/forgot-password` : Jika email terdaftar dan aktif -> buat JWT singkat (token reset), bentuk link ke frontend: `${FRONTEND_URL}/reset-password?token=...`, lalu kirim email menggunakan `nodemailer`.
+  - `POST /api/auth/reset-password` : Menerima `token` dan `password` baru; memverifikasi token, hashing password baru, lalu update record user di DB.
+
+- Endpoint Data Pegawai & Dashboard:
+  - `GET /api/employees` (dengan pagination, filter, search): Mengambil daftar pegawai.
+  - `POST /api/employees`, `PUT /api/employees/:id`, `DELETE /api/employees/:id`: Create/update/delete pegawai.
+  - `/api/dashboard/stats` : Mengembalikan metrik utama (total karyawan, aktif, divisi, user).
+  - `/api/dashboard/growth` : Data pertumbuhan pegawai per bulan (untuk chart).
+  - `/api/dashboard/divisions` : Distribusi pegawai per divisi (untuk pie chart).
+  - `/api/dashboard/recent` : Daftar karyawan terbaru yang disederhanakan (id, employee_code, full_name, division, position, employment_status, join_date) dan diurutkan berdasarkan `employee_code`.
+
+- Upload & Ekspor:
+  - Menggunakan `multer` untuk menyimpan file di `public/uploads`.
+  - Ekspor laporan: dibuat dalam format Excel (XLSX) atau PDF (`pdfkit`, `xlsx` digunakan pada `server.js`).
+
+- Email & SMTP:
+  - Transporter `nodemailer` dibuat berdasarkan `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` di `.env.local`.
+  - Template email sederhana untuk reset password mengandung link yang mengarah ke halaman frontend `reset-password`.
+
+2) Frontend — folder `app/`
+- Tujuan umum: Menyajikan UI untuk pengguna dan admin (dashboard, daftar pegawai, upload data, manajemen user, dsb.).
+
+- `app/dashboard/page.tsx` (Dashboard utama)
+  - Mengambil data dashboard (stats, growth, divisions) dan menampilkan:
+    - Kartu metrik (total karyawan, divisi, karyawan aktif, total users).
+    - Grafik pertumbuhan (LineChart) dan distribusi divisi (PieChart) menggunakan `recharts`.
+    - Tabel "Recent Employees" menampilkan kolom: `Employee Code`, `Name`, `Division`, `Position`, `Status`, `Join Date`.
+  - Mengambil daftar recent employees dari endpoint yang sama, menerapkan fungsi client-side `sortByEmployeeCode` untuk memastikan urutan.
+
+- Halaman Autentikasi
+  - `app/login/page.tsx` : Form login — memanggil endpoint `POST /api/auth/login`.
+  - `app/register/page.tsx` : Form registrasi — memanggil endpoint `POST /api/auth/register`.
+  - `app/forgot-password/page.tsx` : Form untuk meminta reset password — memanggil `POST /api/auth/forgot-password`.
+  - `app/reset-password/page.tsx` : Halaman yang menerima `token` sebagai query param; pengguna memasukkan password baru dan dikirim ke `POST /api/auth/reset-password`.
+
+- Komponen Layout & Navigasi
+  - `app/components/DashboardLayout.tsx` : Sidebar, topbar, navigasi, toggle theme, dan menu user/logout.
+  - `app/components/ProtectedRoute.tsx` : Pembungkus yang memastikan hanya user terautentikasi yang bisa melihat halaman tertentu; jika belum, redirect ke login.
+
+- API Client & Hook
+  - `app/lib/api.ts` : Membuat instance `axios` (`apiClient`) dengan `baseURL` dari `NEXT_PUBLIC_API_URL`. Menyediakan wrapper API (`authAPI`, `employeesAPI`, `dashboardAPI`, dll.) dan `handleApiError` untuk normalisasi pesan error.
+  - `app/hooks/useApi.ts` : Hook umum untuk memudahkan pemanggilan API (menangani `loading`, `error`, `data`). Ada helper `useGet`, `usePost`, `usePut`, `useDelete`.
+
+- Context Auth
+  - `app/contexts/AuthContext.tsx` : Menyimpan state user, mengelola token (simpan ke localStorage), menyediakan fungsi `login`, `register`, `logout`, `refreshToken`, dan otomatisasi refresh token.
+  - Interceptor axios di sini juga memastikan permintaan API menambahkan header `Authorization` dan mencoba refresh token ketika menerima 401.
+
+3) Komponen UI (folder `components/ui/`)
+- Kumpulan komponen UI yang dapat digunakan ulang: `button.tsx`, `input.tsx`, `modal.tsx`, `table.tsx`, `toast.tsx`, dll. Komponen ini digunakan di seluruh aplikasi untuk konsistensi tampilan.
+
+4) File penting konfigurasi & env
+- `.env.local` : Variabel lingkungan (DB, API URL, JWT secrets, FRONTEND_URL, SMTP_*)
+- `package.json` : Skrip pengembangan. `dev` biasanya menjalankan backend (`node server.js`) dan frontend (`next dev`) secara bersamaan.
+
+5) Alur Reset Password (end-to-end)
+ 1. Pengguna memasukkan email di `app/forgot-password/page.tsx` → panggil `POST /api/auth/forgot-password`.
+ 2. Backend (`server.js`) mengecek email, membuat JWT singkat, lalu mengirim email melalui `nodemailer` dengan link `${FRONTEND_URL}/reset-password?token=...`.
+ 3. Pengguna mengklik link, browser membuka `app/reset-password/page.tsx`, halaman mengambil `token` dari query.
+ 4. Pengguna memasukkan password baru → frontend memanggil `POST /api/auth/reset-password` (body: `{ token, password }`).
+ 5. Backend memverifikasi token, meng-hash password baru, dan meng-update tabel `users`.
+
+-- Detail: Forgot Password (penjelasan lebih lengkap)
+ - Lokasi frontend: `app/forgot-password/page.tsx`.
+   - UI: form sederhana untuk memasukkan alamat email.
+   - Validasi: memeriksa format email sebelum mengirim permintaan.
+   - Setelah berhasil, menampilkan pesan sukses (toast) dan instruksi.
+
+ - Lokasi backend: bagian `POST /api/auth/forgot-password` di `server.js`.
+   - Validasi server-side: cek apakah email ada dan status akun aktif.
+   - Pembuatan token: membuat JWT berisi `id` dan `email` dengan waktu kadaluarsa singkat (mis. 1 jam atau sesuai `JWT_EXPIRES_IN`).
+   - Pembuatan link: `${FRONTEND_URL}/reset-password?token=${encodeURIComponent(token)}`.
+   - Pengiriman email: menggunakan `nodemailer.sendMail()` dengan `from`, `to`, `subject`, dan `html` yang berisi tautan reset.
+   - Logging: saat SMTP tidak terkonfigurasi, server hanya menulis link ke log untuk debug.
+
+ - Keamanan & praktik baik:
+   - Token bersifat sekali pakai di logika ini (tidak disimpan di DB), jadi kadaluarsa mengurangi risiko.
+   - Pastikan link reset menggunakan `FRONTEND_URL` yang benar (mis. `https://example.com` di produksi).
+   - Batasi rate (throttling) permintaan forgot-password untuk mencegah spam/abuse (belum diimplementasikan di kode, direkomendasikan menambah middleware rate limiter).
+
+-- Detail: reCAPTCHA (penjelasan & penggunaan)
+ - Tujuan: mencegah abuse otomatis (bot) pada form sensitif seperti `register` dan `forgot-password`.
+ - Implementasi di proyek ini:
+   - Frontend menyertakan `NEXT_PUBLIC_RECAPTCHA_SITE_KEY` pada form (lihat `.env.local` untuk kunci publik).
+   - Contoh alur: sebelum submit form, frontend memanggil script Google reCAPTCHA v2/v3 untuk mendapatkan `recaptchaToken`.
+   - `recaptchaToken` dikirim sebagai bagian dari body request (mis. `{ email, recaptchaToken }`).
+
+ - Validasi server-side:
+   - Server menerima `recaptchaToken` dan melakukan verifikasi ke Google reCAPTCHA API dengan `RECAPTCHA_SECRET_KEY` (server-side key) menggunakan `axios` atau `fetch`.
+   - Jika Google mengembalikan skor/hasil valid, lanjutkan proses (register atau forgot-password). Jika tidak, tolak permintaan dan kembalikan error.
+
+ - Penempatan kunci & environment:
+   - `NEXT_PUBLIC_RECAPTCHA_SITE_KEY` : kunci publik untuk frontend (di `.env.local`).
+   - `RECAPTCHA_SECRET_KEY` : kunci rahasia untuk validasi server-side (jangan pernah diekspos di frontend).
+
+ - Catatan implementasi pada repo ini:
+   - Ada variabel `NEXT_PUBLIC_RECAPTCHA_SITE_KEY` dan `RECAPTCHA_SECRET_KEY` di `.env.local`.
+   - Pada beberapa handler (mis. register/login) reCAPTCHA disebut sebagai "temporarily disabled" atau dilewati dalam logika — artinya hook/field tersedia tapi server mungkin belum menolak ketika token tidak ada. Untuk produksi, pastikan server selalu memverifikasi token.
+
+
+6) Cara kerja token dan penyimpanan
+- `accessToken` (JWT) digunakan untuk autentikasi rute API, disimpan di `localStorage` (diatur oleh `AuthContext`).
+- `refreshToken` disimpan juga di `localStorage` untuk memperbarui `accessToken` tanpa memaksa login ulang.
+- Axios interceptor menambahkan header `Authorization: Bearer <token>` pada setiap permintaan.
+
+7) Catatan operasional / troubleshooting
+- Jika reset email gagal (kode `535 Bad Credentials`), periksa `SMTP_USER` dan `SMTP_PASS` di `.env.local`, pastikan menggunakan App Password Gmail (16 karakter tanpa spasi) dan 2-Step Verification aktif.
+- Jika halaman `reset-password` menghasilkan 404, pastikan `app/reset-password/page.tsx` ada (sudah ditambahkan) dan Next.js dev server dijalankan ulang.
+
+8) Rekomendasi pembacaan file (urut prioritas)
+- `server.js` — logika backend dan endpoint (mulai di root project).
+- `app/contexts/AuthContext.tsx` — alur autentikasi dan penyimpanan token.
+- `app/lib/api.ts` — konfigurasi axios dan wrapper API.
+- `app/dashboard/page.tsx` — visualisasi data dan pemanggilan API untuk dashboard.
+- `app/reset-password/page.tsx`, `app/forgot-password/page.tsx` — alur lupa/reset.
+
+Jika Anda mau, saya dapat:
+- Menambahkan daftar fungsi/komponen per-file lengkap beserta nomor baris (bisa membantu navigasi).
+- Mengonversi dokumen ini ke format Markdown (`PROJECT_FUNCTIONS.md`) untuk tampilan yang lebih rapi.
+
+Generated on: 2026-05-17
